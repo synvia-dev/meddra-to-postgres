@@ -14,3 +14,5 @@ data
 **/*.gz
 
 **/.DS_Store
+
+get-pip.py
