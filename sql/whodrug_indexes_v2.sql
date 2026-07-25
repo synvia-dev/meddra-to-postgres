@@ -30,6 +30,12 @@ CREATE INDEX IF NOT EXISTS idx_mp_drug_code
 CREATE INDEX IF NOT EXISTS idx_mp_drug_key_name
   ON mp (drug_rec_no, seq1, seq2, lower(drug_name));
 
+-- Active-ingredient search: prefix LIKE on lower(substance_name). The v1 index set
+-- had no substance_name index (trigram was dropped above), so the ecrf ingredient
+-- branch would seq scan sun without this.
+CREATE INDEX IF NOT EXISTS idx_sun_substance_name_lower_pattern
+  ON sun (lower(substance_name) text_pattern_ops);
+
 COMMIT;
 
 -- Run ANALYZE outside the transaction
