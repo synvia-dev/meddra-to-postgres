@@ -30,6 +30,11 @@ CREATE INDEX idx_ing_substance_id ON ing(substance_id);
 -- SUN: cas_number (lateral lookups)
 CREATE INDEX idx_sun_cas_number ON sun(cas_number);
 
+-- SUN: prefix LIKE on lower(substance_name) — active-ingredient search
+-- (ecrf whodrug lookup drives the ingredient branch from sun, then ing/mp).
+CREATE INDEX idx_sun_substance_name_lower_pattern
+  ON sun (lower(substance_name) text_pattern_ops);
+
 -- Refresh planner statistics after a full load
 ANALYZE mp;
 ANALYZE thg;
