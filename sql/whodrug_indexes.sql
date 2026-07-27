@@ -19,6 +19,18 @@ CREATE INDEX idx_mp_drug_code
 CREATE INDEX idx_mp_drug_key_name
   ON mp (drug_rec_no, seq1, seq2, lower(drug_name));
 
+-- MP: exact NORMALIZED match on drug_name for the medical-coding auto-code path
+-- (ecrf findExactCurrentDrug / findExactCurrentDrugBatch). The predicate is the functional
+-- expression translate(btrim(regexp_replace(lower(drug_name),'\s+',' ','g')), <accents>); no
+-- prefix/pattern index serves it, so without this it seq scans ~5.6M rows (~6.2s per lookup) on the
+-- interactive 1st-save path. IMPORTANT: the accent maps below MUST stay byte-identical to ecrf
+-- apps/api/src/modules/medical-coding/coding-term-accents.ts (ACCENT_FROM / ACCENT_TO) and the
+-- inlined literals in coding-term-sql.ts — otherwise the planner will not match this index.
+CREATE INDEX idx_mp_drug_name_normalized
+  ON mp (translate(btrim(regexp_replace(lower(drug_name), '\s+', ' ', 'g')),
+    'áàâãäåéèêëíìîïóòôõöøúùûüçñýÿÁÀÂÃÄÅÉÈÊËÍÌÎÏÓÒÔÕÖØÚÙÛÜÇÑÝŸ',
+    'aaaaaaeeeeiiiioooooouuuucnyyaaaaaaeeeeiiiioooooouuuucnyy'));
+
 -- THG: join with mp and atc
 CREATE INDEX idx_thg_record_id ON thg(record_id);
 CREATE INDEX idx_thg_atc_code ON thg(atc_code);
