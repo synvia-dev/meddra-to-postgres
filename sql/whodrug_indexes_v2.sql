@@ -36,6 +36,16 @@ CREATE INDEX IF NOT EXISTS idx_mp_drug_key_name
 CREATE INDEX IF NOT EXISTS idx_sun_substance_name_lower_pattern
   ON sun (lower(substance_name) text_pattern_ops);
 
+-- Exact NORMALIZED match on drug_name for the medical-coding auto-code path (ecrf
+-- findExactCurrentDrug / findExactCurrentDrugBatch). Functional expression not served by any
+-- prefix index → without it the auto-code seq scans ~5.6M rows (~6.2s per lookup) on the
+-- interactive 1st-save path. Accent maps MUST stay byte-identical to ecrf coding-term-accents.ts
+-- (ACCENT_FROM / ACCENT_TO) or the planner will not match this index. Build ~1min on 5.6M rows.
+CREATE INDEX IF NOT EXISTS idx_mp_drug_name_normalized
+  ON mp (translate(btrim(regexp_replace(lower(drug_name), '\s+', ' ', 'g')),
+    'áàâãäåéèêëíìîïóòôõöøúùûüçñýÿÁÀÂÃÄÅÉÈÊËÍÌÎÏÓÒÔÕÖØÚÙÛÜÇÑÝŸ',
+    'aaaaaaeeeeiiiioooooouuuucnyyaaaaaaeeeeiiiioooooouuuucnyy'));
+
 COMMIT;
 
 -- Run ANALYZE outside the transaction
