@@ -89,6 +89,43 @@ if [ ! -e "${DBDIR}" ]; then
   exit 1
 fi
 #
+# The distribution declares its own version and language in meddra_release.asc, as
+# `<version>$<language>$$$$`. Assert both against what the caller declared, because
+# nothing else does: the DROP guard stops us from clobbering the WRONG database, but a
+# stale data/MedAscii still builds the RIGHT database with the wrong content — English
+# `.asc` files loaded as `meddra_290`, or Portuguese ones as `meddra_290_en`. That fails
+# nowhere; it surfaces weeks later as a coder who cannot find their own terms.
+# Normalization: strip CR/LF (the pt distribution is CRLF, the en one has no trailing
+# newline at all) and outer spaces, but NOT inner ones — the language is a phrase
+# ("Brazilian Portuguese").
+RELEASE_ASC="${DBDIR}/MedAscii/meddra_release.asc"
+if [ ! -f "$RELEASE_ASC" ]; then
+  printf "WARNING: ${RELEASE_ASC} not found — skipping version/language assertion.\n"
+else
+  asc_field() { cut -d'$' -f"$1" "$RELEASE_ASC" | head -1 | tr -d '\r\n' | sed -E 's/^ +| +$//g'; }
+  ASC_VERSION=$(asc_field 1)
+  ASC_LANG=$(asc_field 2)
+  # Only `en` and the unsuffixed default reach this point (see the allowlist above).
+  if [ "$MEDDRA_LANG" = "en" ]; then
+    EXPECTED_ASC_LANG="English"
+  else
+    EXPECTED_ASC_LANG="Brazilian Portuguese"
+  fi
+  if [ "$ASC_VERSION" != "$DBVERSION" ]; then
+    printf "ERROR: data/MedAscii is MedDRA ${ASC_VERSION}, but LATEST_RELEASE.txt says ${DBVERSION}.\n"
+    printf "       Loading it would populate '${DBNAME}' with ${ASC_VERSION} terms. Fix one of the two.\n"
+    exit 1
+  fi
+  if [ "$ASC_LANG" != "$EXPECTED_ASC_LANG" ]; then
+    printf "ERROR: data/MedAscii is the '${ASC_LANG}' distribution, but the target is\n"
+    printf "       '${DBNAME}' (MEDDRA_LANG='${MEDDRA_LANG:-<unset>}', expects '${EXPECTED_ASC_LANG}').\n"
+    printf "       Swap the .asc files or fix MEDDRA_LANG. If MedDRA renamed the language,\n"
+    printf "       update the mapping in this script.\n"
+    exit 1
+  fi
+  printf "DISTRIBUTION: MedDRA ${ASC_VERSION} ${ASC_LANG} — matches target.\n"
+fi
+#
 printf "CONVERTING RAW FILES TO TSVS.\n"
 ${cwd}/python/meddra_utils.py convert_soc --i ${DBDIR}/MedAscii/soc.asc --o $DATADIR/meddra_soc.tsv
 ${cwd}/python/meddra_utils.py convert_hlt --i ${DBDIR}/MedAscii/hlt.asc --o $DATADIR/meddra_hlt.tsv

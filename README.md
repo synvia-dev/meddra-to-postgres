@@ -84,6 +84,25 @@ set to English (and vice-versa). Provisioning a new release means two runs:
 One language per run: `data/MedAscii/` holds a single distribution, so swap the `.asc`
 files between runs.
 
+**The two distributions are not shaped the same.** The English one ships its `.asc` files
+in `MedAscii/`, but the Brazilian Portuguese one ships them in `ascii-<version>/`
+(`ascii-281/` for 28.1) — either way they go into `data/MedAscii/`, so the Portuguese copy
+is a rename:
+
+```sh
+cp -R <dist>/MedDRA_29_0_English/MedAscii            data/MedAscii   # English
+cp -R <dist>/MedDRA_28_1_Brazilian_Portuguese/ascii-281 data/MedAscii # Portuguese
+```
+
+The Portuguese files are also **Latin-1 with CRLF** while the English ones are ASCII —
+already handled, `meddra_utils.py` reads `latin-1` and writes UTF-8. Do not "fix" that.
+
+Before converting anything, the script reads `data/MedAscii/meddra_release.asc` (which the
+distribution stamps as `<version>$<language>$$$$`) and **refuses to run if the version or
+the language disagrees with the target**. That is what stops the failure mode the `DROP`
+guard cannot see: the right database name loaded with the wrong content, which raises no
+error and only surfaces later as a coder who cannot find their own terms.
+
 `MEDDRA_LANG` accepts only the suffixes the eCRF knows how to resolve (today: `en`) and is
 lowercased before use. `MEDDRA_LANG=pt` is rejected on purpose — Portuguese is the
 unsuffixed default.
