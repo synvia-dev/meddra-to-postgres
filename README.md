@@ -50,14 +50,66 @@ python3 -m pip install psycopg2
 ### Import MedDRA
 
 1. Locate the `.asc` files from MedDRA (subscription required) and paste them inside `data/MedAscii/`
-2. Update `LATEST_RELEASE.txt` with the version (e.g., `28.1`)
+2. Update `LATEST_RELEASE.txt` with the version (e.g., `29.0`)
 3. Run:
 
 ```sh
 ./sh/Go_meddra_DbCreate.sh
 ```
 
-The script creates a database named `meddra_281` (version without dots) with all MedDRA terms.
+The script creates a database named `meddra_<version without dots>` (`meddra_290` for
+`29.0`) with all MedDRA terms.
+
+### Languages / translations
+
+MedDRA ships one distribution per translation, all sharing the same term codes. The
+consumer (eCRF) resolves the database per study as `meddra_<version>[_<lang>]`, where the
+**unsuffixed** name is the legacy Portuguese load. Set `MEDDRA_LANG` to the language tag of
+whatever distribution you dropped in `data/MedAscii/`:
+
+```sh
+# Portuguese (default, unsuffixed) -> meddra_290
+./sh/Go_meddra_DbCreate.sh
+
+# English -> meddra_290_en
+MEDDRA_LANG=en ./sh/Go_meddra_DbCreate.sh
+```
+
+**Every new version has to be loaded in both languages.** Studies pick the dictionary
+language individually, and the eCRF deliberately refuses to fall back to another language,
+so a version that exists only as `meddra_<version>` breaks Medical Coding for every study
+set to English (and vice-versa). Provisioning a new release means two runs:
+`meddra_<version>` and `meddra_<version>_en`.
+
+One language per run: `data/MedAscii/` holds a single distribution, so swap the `.asc`
+files between runs.
+
+**The two distributions are not shaped the same.** The English one ships its `.asc` files
+in `MedAscii/`, but the Brazilian Portuguese one ships them in `ascii-<version>/`
+(`ascii-281/` for 28.1) — either way they go into `data/MedAscii/`, so the Portuguese copy
+is a rename:
+
+```sh
+cp -R <dist>/MedDRA_29_0_English/MedAscii            data/MedAscii   # English
+cp -R <dist>/MedDRA_28_1_Brazilian_Portuguese/ascii-281 data/MedAscii # Portuguese
+```
+
+The Portuguese files are also **Latin-1 with CRLF** while the English ones are ASCII —
+already handled, `meddra_utils.py` reads `latin-1` and writes UTF-8. Do not "fix" that.
+
+Before converting anything, the script reads `data/MedAscii/meddra_release.asc` (which the
+distribution stamps as `<version>$<language>$$$$`) and **refuses to run if the version or
+the language disagrees with the target**. That is what stops the failure mode the `DROP`
+guard cannot see: the right database name loaded with the wrong content, which raises no
+error and only surfaces later as a coder who cannot find their own terms.
+
+`MEDDRA_LANG` accepts only the suffixes the eCRF knows how to resolve (today: `en`) and is
+lowercased before use. `MEDDRA_LANG=pt` is rejected on purpose — Portuguese is the
+unsuffixed default.
+
+`Go_meddra_DbCreate.sh` **drops** the target database before rebuilding it. To keep a
+forgotten `MEDDRA_LANG` from wiping a live Portuguese `meddra_<version>`, the script now
+aborts when the target already exists; pass `MEDDRA_DB_OVERWRITE=1` to rebuild on purpose.
 
 ### MedDRA Hierarchy (descending order)
 
