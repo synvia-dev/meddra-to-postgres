@@ -17,7 +17,7 @@ if [ ! -f ${cwd}/LATEST_RELEASE.txt ]; then
   printf "ERROR: not found: ${cwd}/LATEST_RELEASE.txt\n"
   exit
 fi
-DBVERSION=$(cat ${cwd}/LATEST_RELEASE.txt)
+DBVERSION=$(tr -d '[:space:]' <${cwd}/LATEST_RELEASE.txt)
 printf "From ${cwd}/LATEST_RELEASE.txt: ${DBVERSION}\n"
 #
 # MedDRA ships one distribution per translation, all sharing the same term codes.
@@ -25,9 +25,36 @@ printf "From ${cwd}/LATEST_RELEASE.txt: ${DBVERSION}\n"
 # where the UNSUFFIXED name is the legacy Portuguese load. So set MEDDRA_LANG to the
 # language tag of the distribution in data/MedAscii — empty (default) builds the
 # Portuguese database, `en` builds meddra_<version>_en.
-MEDDRA_LANG="${MEDDRA_LANG:-}"
+#
+# EVERY new MedDRA version has to be loaded once per language below: studies pick the
+# language individually and the eCRF refuses to fall back to another one, so a version
+# present in only one language breaks Medical Coding for the studies on the other.
+#
+# Lowercased because Postgres folds unquoted identifiers: `MEDDRA_LANG=EN` would miss
+# the `meddra_<version>_en` row in the existence check below and then have its
+# DROP/CREATE folded onto that very database.
+MEDDRA_LANG="$(printf '%s' "${MEDDRA_LANG:-}" | tr '[:upper:]' '[:lower:]')"
+#
+# Suffixes the consumer knows how to resolve (`medicalCodingDictionaryLanguages`, in
+# packages/db-schemas/src/schemas/core/medical-coding-config.ts). `pt` is deliberately
+# absent: it maps to the UNSUFFIXED name. Anything outside this list builds a database
+# no study can ever read, and the load only fails much later, at query time.
+MEDDRA_LANGS="en"
+if [ "$MEDDRA_LANG" = "pt" ]; then
+  printf "ERROR: Portuguese uses the UNSUFFIXED database name — re-run without MEDDRA_LANG.\n"
+  exit 1
+fi
 LANGSUFFIX=""
 if [ -n "$MEDDRA_LANG" ]; then
+  case " ${MEDDRA_LANGS} " in
+  *" ${MEDDRA_LANG} "*) ;;
+  *)
+    printf "ERROR: unsupported MEDDRA_LANG '${MEDDRA_LANG}' (supported: ${MEDDRA_LANGS}).\n"
+    printf "       The eCRF only resolves the suffixes above, so any other one builds a\n"
+    printf "       database no study reads. Add the language to the consumer enum first.\n"
+    exit 1
+    ;;
+  esac
   LANGSUFFIX="_${MEDDRA_LANG}"
 fi
 DBNAME="meddra_$(echo $DBVERSION | sed 's/\.//g')${LANGSUFFIX}"
@@ -94,10 +121,12 @@ $DATADIR/meddra_smq_content.tsv \
 #
 # -d postgres: a bare `psql -c` connects to a database named after PGUSER, which
 # need not exist on the target server (the prod dictionary host has no `meddict`).
-psql -d postgres -c "DROP DATABASE IF EXISTS $DBNAME"
-psql -d postgres -c "CREATE DATABASE $DBNAME"
+# Quoted identifier: keeps the DDL acting on the exact name the existence check above
+# looked up in pg_database, instead of on whatever Postgres folds it to.
+psql -d postgres -c "DROP DATABASE IF EXISTS \"$DBNAME\""
+psql -d postgres -c "CREATE DATABASE \"$DBNAME\""
 #
-psql -d $DBNAME -c "COMMENT ON DATABASE $DBNAME IS 'MedDRA: Medical Dictionary for Regulatory Activities (v${DBVERSION}${MEDDRA_LANG:+, ${MEDDRA_LANG}})'"
+psql -d "$DBNAME" -c "COMMENT ON DATABASE \"$DBNAME\" IS 'MedDRA: Medical Dictionary for Regulatory Activities (v${DBVERSION}${MEDDRA_LANG:+, ${MEDDRA_LANG}})'"
 #
 i_table="0"
 for tsvfile in $tsvfiles; do
