@@ -19,7 +19,32 @@ if [ ! -f ${cwd}/LATEST_RELEASE.txt ]; then
 fi
 DBVERSION=$(cat ${cwd}/LATEST_RELEASE.txt)
 printf "From ${cwd}/LATEST_RELEASE.txt: ${DBVERSION}\n"
-DBNAME="meddra_$(echo $DBVERSION | sed 's/\.//g')"
+#
+# MedDRA ships one distribution per translation, all sharing the same term codes.
+# The consumer (eCRF) resolves the database per study as `meddra_<version>[_<lang>]`,
+# where the UNSUFFIXED name is the legacy Portuguese load. So set MEDDRA_LANG to the
+# language tag of the distribution in data/MedAscii — empty (default) builds the
+# Portuguese database, `en` builds meddra_<version>_en.
+MEDDRA_LANG="${MEDDRA_LANG:-}"
+LANGSUFFIX=""
+if [ -n "$MEDDRA_LANG" ]; then
+  LANGSUFFIX="_${MEDDRA_LANG}"
+fi
+DBNAME="meddra_$(echo $DBVERSION | sed 's/\.//g')${LANGSUFFIX}"
+printf "TARGET DATABASE: ${DBNAME} (${PGHOST}:${PGPORT}, lang='${MEDDRA_LANG:-pt (unsuffixed)}')\n"
+#
+# The load below is destructive (DROP DATABASE). Refuse to clobber a database that
+# already exists unless the caller opts in: on a shared server a forgotten
+# MEDDRA_LANG resolves to the unsuffixed name and would wipe the Portuguese
+# `meddra_<version>` that studies are reading right now.
+DB_EXISTS=$(psql -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = '${DBNAME}'")
+if [ -n "$DB_EXISTS" ] && [ "${MEDDRA_DB_OVERWRITE:-}" != "1" ]; then
+  printf "ERROR: database '${DBNAME}' already exists on ${PGHOST}:${PGPORT}.\n"
+  printf "       Check MEDDRA_LANG and LATEST_RELEASE.txt. To DROP and rebuild it\n"
+  printf "       anyway, re-run with MEDDRA_DB_OVERWRITE=1.\n"
+  exit 1
+fi
+#
 DATADIR="${cwd}/data"
 #
 if [ ! -e "$DATADIR" ]; then
@@ -67,10 +92,12 @@ $DATADIR/meddra_smq_list.tsv \
 $DATADIR/meddra_smq_content.tsv \
 "
 #
-psql -c "DROP DATABASE IF EXISTS $DBNAME"
-psql -c "CREATE DATABASE $DBNAME"
+# -d postgres: a bare `psql -c` connects to a database named after PGUSER, which
+# need not exist on the target server (the prod dictionary host has no `meddict`).
+psql -d postgres -c "DROP DATABASE IF EXISTS $DBNAME"
+psql -d postgres -c "CREATE DATABASE $DBNAME"
 #
-psql -d $DBNAME -c "COMMENT ON DATABASE $DBNAME IS 'MedDRA: Medical Dictionary for Regulatory Activities (v${DBVERSION})'"
+psql -d $DBNAME -c "COMMENT ON DATABASE $DBNAME IS 'MedDRA: Medical Dictionary for Regulatory Activities (v${DBVERSION}${MEDDRA_LANG:+, ${MEDDRA_LANG}})'"
 #
 i_table="0"
 for tsvfile in $tsvfiles; do

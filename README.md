@@ -59,6 +59,28 @@ python3 -m pip install psycopg2
 
 The script creates a database named `meddra_281` (version without dots) with all MedDRA terms.
 
+### Languages / translations
+
+MedDRA ships one distribution per translation, all sharing the same term codes. The
+consumer (eCRF) resolves the database per study as `meddra_<version>[_<lang>]`, where the
+**unsuffixed** name is the legacy Portuguese load. Set `MEDDRA_LANG` to the language tag of
+whatever distribution you dropped in `data/MedAscii/`:
+
+```sh
+# Portuguese (default, unsuffixed) -> meddra_290
+./sh/Go_meddra_DbCreate.sh
+
+# English -> meddra_290_en
+MEDDRA_LANG=en ./sh/Go_meddra_DbCreate.sh
+```
+
+One language per run: `data/MedAscii/` holds a single distribution, so swap the `.asc`
+files between runs.
+
+`Go_meddra_DbCreate.sh` **drops** the target database before rebuilding it. To keep a
+forgotten `MEDDRA_LANG` from wiping a live Portuguese `meddra_<version>`, the script now
+aborts when the target already exists; pass `MEDDRA_DB_OVERWRITE=1` to rebuild on purpose.
+
 ### MedDRA Hierarchy (descending order)
 
 ```
