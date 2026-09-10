@@ -1,117 +1,105 @@
 # Medical Dictionary Tools
 
-Scripts and code to build local PostgreSQL databases from raw MedDRA and WHODrug files.
+Builds PostgreSQL databases from the raw MedDRA and WHODrug distributions. These databases
+are what the eCRF's Medical Coding module reads — it only ever queries them, never writes.
 
-* MedDRA: <https://meddra.com/>
-* WHODrug: <https://who-umc.org/whodrug/>
+* MedDRA: <https://meddra.com/> — one distribution per translation, released twice a year
+* WHODrug: <https://who-umc.org/whodrug/> — one distribution, released twice a year
 
-Both dictionaries are regularly updated and require subscription credentials to download.
+Both require subscription credentials to download. Each version gets its own database, and
+versions coexist side by side; nothing is ever migrated in place.
 
-## Dependencies
+| Dictionary | Database | Built by |
+| --- | --- | --- |
+| MedDRA, Portuguese | `meddra_<version>` (e.g. `meddra_290`) | `sh/Go_meddra_DbCreate.sh` |
+| MedDRA, English | `meddra_<version>_en` | `sh/Go_meddra_DbCreate.sh` with `MEDDRA_LANG=en` |
+| WHODrug Global C3 | `whodrug_<YYMM>` (e.g. `whodrug_2603`) | `sh/Go_whodrug_DbCreate.sh` |
 
-* Python 3 packages (see below)
-* Docker and Docker Compose (for running PostgreSQL locally)
-
-## Quick Start
-
-### 1. Start PostgreSQL
+## Quick start
 
 ```bash
-docker compose up -d
+docker compose up -d    # PostgreSQL on localhost:5433
 ```
 
-The database will be available at:
-- **Host**: localhost
-- **Port**: 5433
-- **Default Database**: meddict
-- **Username**: meddict
-- **Password**: meddict
+Defaults: user `meddict`, password `meddict`, database `medical-coding` —
+`postgresql://meddict:meddict@localhost:5433/medical-coding`. The dictionary databases are
+created alongside it, not inside it.
 
-Connection string: `postgresql://meddict:meddict@localhost:5433/meddict`
-
-The container hosts multiple databases (one per dictionary version):
-- `meddra_281` — MedDRA v28.1
-- `whodrug_2603` — WHODrug Global C3 March 2026
-- etc.
-
-### 2. Install Python packages
+Python packages, needed **only for the MedDRA import** (the WHODrug scripts are stdlib-only):
 
 ```sh
-python3 -m pip install BioClients
-python3 -m pip install psycopg2
+python3 -m pip install BioClients psycopg2-binary pandas
 ```
 
-(`BioClients` is only needed for MedDRA import)
+`BioClients` declares no dependencies, so `pandas` will not come in on its own — without it
+the load fails table by table with `ModuleNotFoundError`. `meddra_utils.py` imports
+`psycopg2` at module load even for the pure conversion steps, so it is required too;
+`psycopg2-binary` avoids needing a local `pg_config` to build.
+
+Only `Go_meddra_DbCreate.sh` and `Go_whodrug_DbCreate.sh` are part of this workflow. The
+other `sh/Go_meddra_*` scripts are upstream leftovers — three of them target a hardcoded
+`meddra` database that this repo never creates.
 
 ---
 
 ## MedDRA
 
-### Import MedDRA
-
-1. Locate the `.asc` files from MedDRA (subscription required) and paste them inside `data/MedAscii/`
-2. Update `LATEST_RELEASE.txt` with the version (e.g., `29.0`)
+1. Copy the distribution's `.asc` files into `data/MedAscii/`
+2. Put the version in `LATEST_RELEASE.txt` (e.g. `29.0`)
 3. Run:
 
 ```sh
-./sh/Go_meddra_DbCreate.sh
-```
-
-The script creates a database named `meddra_<version without dots>` (`meddra_290` for
-`29.0`) with all MedDRA terms.
-
-### Languages / translations
-
-MedDRA ships one distribution per translation, all sharing the same term codes. The
-consumer (eCRF) resolves the database per study as `meddra_<version>[_<lang>]`, where the
-**unsuffixed** name is the legacy Portuguese load. Set `MEDDRA_LANG` to the language tag of
-whatever distribution you dropped in `data/MedAscii/`:
-
-```sh
-# Portuguese (default, unsuffixed) -> meddra_290
+# Portuguese -> meddra_290
 ./sh/Go_meddra_DbCreate.sh
 
 # English -> meddra_290_en
 MEDDRA_LANG=en ./sh/Go_meddra_DbCreate.sh
 ```
 
-**Every new version has to be loaded in both languages.** Studies pick the dictionary
-language individually, and the eCRF deliberately refuses to fall back to another language,
-so a version that exists only as `meddra_<version>` breaks Medical Coding for every study
-set to English (and vice-versa). Provisioning a new release means two runs:
-`meddra_<version>` and `meddra_<version>_en`.
+### Languages
 
-One language per run: `data/MedAscii/` holds a single distribution, so swap the `.asc`
-files between runs.
+The eCRF resolves the database per study as `meddra_<version>[_<lang>]`, where the
+**unsuffixed** name is the Portuguese load. So `MEDDRA_LANG` is empty for Portuguese and
+`en` for English — it accepts only suffixes the eCRF knows how to resolve (today: `en`), is
+lowercased before use, and rejects `pt` on purpose.
 
-**The two distributions are not shaped the same.** The English one ships its `.asc` files
-in `MedAscii/`, but the Brazilian Portuguese one ships them in `ascii-<version>/`
-(`ascii-281/` for 28.1) — either way they go into `data/MedAscii/`, so the Portuguese copy
-is a rename:
+**Every new version has to be loaded in both languages.** Studies pick their dictionary
+language individually and the eCRF deliberately refuses to fall back to another one, so a
+version that exists in only one language breaks Medical Coding for every study on the
+other. Provisioning a release means two runs.
+
+`data/MedAscii/` holds one distribution at a time, so swap the `.asc` files between runs.
+**The two distributions are not shaped the same:** the English one ships them in
+`MedAscii/`, the Brazilian Portuguese one in `ascii-<version>/`. Both go to
+`data/MedAscii/`, so the Portuguese copy is a rename:
 
 ```sh
-cp -R <dist>/MedDRA_29_0_English/MedAscii            data/MedAscii   # English
-cp -R <dist>/MedDRA_28_1_Brazilian_Portuguese/ascii-281 data/MedAscii # Portuguese
+cp -R <dist>/MedAscii        data/MedAscii   # English
+cp -R <dist>/ascii-<version> data/MedAscii   # Portuguese, e.g. ascii-281 for 28.1
 ```
 
-The Portuguese files are also **Latin-1 with CRLF** while the English ones are ASCII —
-already handled, `meddra_utils.py` reads `latin-1` and writes UTF-8. Do not "fix" that.
+The Portuguese files are **Latin-1 with CRLF** where the English ones are ASCII. Already
+handled — `meddra_utils.py` reads `latin-1` and writes UTF-8, which is why the Portuguese
+databases have correct accents. Do not "fix" it to UTF-8.
 
-Before converting anything, the script reads `data/MedAscii/meddra_release.asc` (which the
-distribution stamps as `<version>$<language>$$$$`) and **refuses to run if the version or
-the language disagrees with the target**. That is what stops the failure mode the `DROP`
-guard cannot see: the right database name loaded with the wrong content, which raises no
-error and only surfaces later as a coder who cannot find their own terms.
+### Safety rails
 
-`MEDDRA_LANG` accepts only the suffixes the eCRF knows how to resolve (today: `en`) and is
-lowercased before use. `MEDDRA_LANG=pt` is rejected on purpose — Portuguese is the
-unsuffixed default.
+The load is destructive: it **drops** the target database before rebuilding. Two
+independent checks stand in front of it, because the two ways to get this wrong fail very
+differently.
 
-`Go_meddra_DbCreate.sh` **drops** the target database before rebuilding it. To keep a
-forgotten `MEDDRA_LANG` from wiping a live Portuguese `meddra_<version>`, the script now
-aborts when the target already exists; pass `MEDDRA_DB_OVERWRITE=1` to rebuild on purpose.
+- **Wrong database.** If the target already exists, the script aborts. Pass
+  `MEDDRA_DB_OVERWRITE=1` to rebuild on purpose. This is what keeps a forgotten
+  `MEDDRA_LANG` — which resolves to the *unsuffixed* name — from wiping the live Portuguese
+  database that studies are reading.
+- **Wrong content.** Before converting anything, the script reads
+  `data/MedAscii/meddra_release.asc` (the distribution stamps it as
+  `<version>$<language>$$$$`) and refuses to run if either disagrees with the target. A
+  stale `data/MedAscii` otherwise builds the *right* database name with the wrong terms,
+  which raises no error at all and surfaces weeks later as a coder who cannot find their
+  own terms.
 
-### MedDRA Hierarchy (descending order)
+### Hierarchy
 
 ```
 SOC  = System Organ Class
@@ -121,89 +109,62 @@ PT   = Preferred Term
 LLT  = Lowest Level Term
 ```
 
-### System Organ Classes
-
-|id 	|text 	|abbr |
-|:---:|:---|:---|
-|10005329	|Blood and lymphatic system disorders	|Blood |
-|10007541	|Cardiac disorders	|Card |
-|10010331	|Congenital, familial and genetic disorders	|Cong |
-|10013993	|Ear and labyrinth disorders	|Ear |
-|10014698	|Endocrine disorders	|Endo |
-|10015919	|Eye disorders	|Eye |
-|10017947	|Gastrointestinal disorders	|Gastr |
-|10018065	|General disorders and administration site conditions	|Genrl |
-|10019805	|Hepatobiliary disorders	|Hepat |
-|10021428	|Immune system disorders	|Immun |
-|10021881	|Infections and infestations	|Infec |
-|10022117	|Injury, poisoning and procedural complications	|Inj&P |
-|10022891	|Investigations	|Inv |
-|10027433	|Metabolism and nutrition disorders	|Metab |
-|10028395	|Musculoskeletal and connective tissue disorders	|Musc |
-|10029104	|Neoplasms benign, malignant and unspecified (incl...	|Neopl |
-|10029205	|Nervous system disorders	|Nerv |
-|10036585	|Pregnancy, puerperium and perinatal conditions	|Preg |
-|10037175	|Psychiatric disorders	|Psych |
-|10038359	|Renal and urinary disorders	|Renal |
-|10038604	|Reproductive system and breast disorders	|Repro |
-|10038738	|Respiratory, thoracic and mediastinal disorders	|Resp |
-|10040785	|Skin and subcutaneous tissue disorders	|Skin |
-|10041244	|Social circumstances	|SocCi |
-|10042613	|Surgical and medical procedures	|Surg |
-|10047065	|Vascular disorders	|Vasc |
-|10077536	|Product issues	|Prod |
+`llt.current` marks whether a term is current, stored as `TRUE`/`FALSE` (converted from the
+distribution's `Y`/`N`). Consumers must treat anything else as non-current.
 
 ---
 
 ## WHODrug C3
 
-### Import WHODrug
-
-1. Copy WHODrug Global C3 CSV files to `data/WHODrugC3/`:
-   - `MP.csv`, `ThG.csv`, `ING.csv`, `SUN.csv`, `ATC.csv`, `PF.csv`, `STR.csv`,
-     `ORG.csv`, `SRCE.csv`, `CCODE.csv`, `PRT.csv`, `UNIT.csv`, `Version.csv`
-
-2. Update `LATEST_WHODRUG_RELEASE.txt` with the version code (e.g., `2603`)
-
+1. Copy the C3 CSV files into `data/WHODrugC3/`:
+   `MP.csv`, `ThG.csv`, `ING.csv`, `SUN.csv`, `ATC.csv`, `PF.csv`, `STR.csv`, `ORG.csv`,
+   `SRCE.csv`, `CCODE.csv`, `PRT.csv`, `UNIT.csv`, `Version.csv`
+2. Put the version code in `LATEST_WHODRUG_RELEASE.txt` (`YYMM`, e.g. `2603` for March 2026)
 3. Run:
 
 ```sh
 ./sh/Go_whodrug_DbCreate.sh
 ```
 
-The script creates a database named `whodrug_2603` with all 13 WHODrug C3 tables.
+WHODrug has no language axis — one database per version, no suffix.
 
-### Version Naming
+> This script does **not** yet have the guards described above for MedDRA: it drops the
+> target without checking, and its `psql` calls omit `-d postgres`. Take care pointing it
+> at a shared server.
 
-WHODrug releases twice per year (March and September). Version code format: `YYMM`.
+### Indexes
 
-| Release | Code | Database |
-|---------|------|----------|
-| March 2026 | `2603` | `whodrug_2603` |
-| September 2026 | `2609` | `whodrug_2609` |
-| March 2027 | `2703` | `whodrug_2703` |
+`Go_whodrug_DbCreate.sh` applies `sql/whodrug_indexes.sql` automatically after the load.
+The strategy is **prefix-anchored btree**, not trigram: lookups are
+`lower(drug_name) LIKE 'term%'` and exact match on `drug_rec_no || seq1 || seq2`. Substring
+search is intentionally unsupported on the hot path.
 
-Multiple versions can coexist in the same PostgreSQL container.
+A database built before that switch carries the old trigram set. Retrofit it with
+`psql -d whodrug_<YYMM> -f sql/whodrug_indexes_v2.sql` — idempotent, and safe to run
+online, since WHODrug is read-only at runtime. Check `pg_indexes` on the live database
+rather than assuming which set it has.
 
-### WHODrug C3 Tables
+### Tables
+
+Row counts are the actual `whodrug_2603` (March 2026) figures, for sanity-checking a load.
 
 | Table | Description | Rows |
 |-------|-------------|------|
-| `mp` | Medicinal Products (main table) | ~5.6M |
-| `thg` | Therapeutic Groups (ATC assignments) | ~6.0M |
-| `ing` | Ingredients | ~9.0M |
-| `sun` | Substances | ~28K |
-| `atc` | ATC Classification (5 levels) | ~1.4K |
-| `pf` | Pharmaceutical Forms | ~226 |
-| `str` | Strengths/Dosages | ~18K |
-| `org` | Organizations (manufacturers) | ~92K |
-| `srce` | Sources/References | ~508 |
-| `ccode` | Country Codes (ISO 3166-1) | ~250 |
-| `prt` | Product Types | ~10 |
-| `unit` | Units of Measurement | ~84 |
+| `mp` | Medicinal Products (main table) | 5,596,868 |
+| `thg` | Therapeutic Groups (ATC assignments) | 6,035,124 |
+| `ing` | Ingredients | 9,041,517 |
+| `sun` | Substances | 28,540 |
+| `atc` | ATC Classification (5 levels) | 1,457 |
+| `pf` | Pharmaceutical Forms | 226 |
+| `str` | Strengths/Dosages | 18,070 |
+| `org` | Organizations (manufacturers) | 92,073 |
+| `srce` | Sources/References | 508 |
+| `ccode` | Country Codes (ISO 3166-1) | 250 |
+| `prt` | Product Types | 10 |
+| `unit` | Units of Measurement | 84 |
 | `version` | Dataset version info | 1 |
 
-### WHODrug C3 Hierarchy
+### Hierarchy
 
 ```
 MP (Medicinal Products)
@@ -216,70 +177,60 @@ MP (Medicinal Products)
   --> PRT (Product Types)
 ```
 
-### Example Queries
+The drug code is composed, not stored:
 
 ```sql
--- Search for a drug by name
 SELECT record_id, drug_name, drug_rec_no || seq1 || seq2 AS drug_code
 FROM mp
-WHERE drug_name ILIKE '%paracetamol%'
-ORDER BY drug_name
-LIMIT 20;
-
--- Full hierarchy: drug with ingredients, ATC codes, and references
-SELECT mp.drug_name, sun.substance_name, atc.atc_code, atc.text AS atc_text,
-       pf.text AS form, str.text AS strength, ccode.country_name
-FROM mp
-LEFT JOIN ing ON mp.record_id = ing.record_id
-LEFT JOIN sun ON ing.substance_id = sun.substance_id
-LEFT JOIN thg ON mp.record_id = thg.record_id
-LEFT JOIN atc ON thg.atc_code = atc.atc_code
-LEFT JOIN pf ON mp.seq3 = pf.pharmform_id
-LEFT JOIN str ON mp.seq4 = str.strength_id
-LEFT JOIN ccode ON mp.country = ccode.country_code
-WHERE mp.drug_name ILIKE '%aspirin%'
+WHERE lower(drug_name) LIKE 'paracetamol%'
 LIMIT 20;
 ```
 
 ---
 
-## Configuration
+## Loading onto a shared server
 
-### Environment Variables
-
-You can override connection defaults via environment variables or a `.env` file:
-
-```env
-PGHOST=localhost
-PGPORT=5433
-PGUSER=meddict
-PGPASSWORD=meddict
-```
-
-### Legacy Configuration
-
-If you need to use the old MedDRA credentials (`meddra/meddra` on port `5432`), create a `.env` file:
-
-```env
-POSTGRES_USER=meddra
-POSTGRES_PASSWORD=meddra
-POSTGRES_DB=meddra
-POSTGRES_PORT=5432
-```
-
-### Dump and Restore
+The scripts read standard `PG*` variables, so they will happily target a remote host:
 
 ```sh
-# Dump
-pg_dump --no-privileges -Fc -d whodrug_2603 > whodrug_2603.pgdump
-
-# Restore
-createdb whodrug_2603
-pg_restore -e -O -x -d whodrug_2603 whodrug_2603.pgdump
+PGHOST=<host> PGPORT=5432 PGUSER=<user> PGPASSWORD=<pass> \
+  MEDDRA_LANG=en ./sh/Go_meddra_DbCreate.sh
 ```
 
-### Stop PostgreSQL
+**Prefer building locally and shipping a dump.** The create scripts drop their target, so
+pointing them straight at a server that hosts live dictionaries puts those databases one
+typo away from a rebuild. Build against the local container, verify, then:
+
+```sh
+pg_dump --no-privileges -Fc -d meddra_290_en > meddra_290_en.pgdump
+
+createdb -h <host> -U <user> meddra_290_en
+pg_restore -h <host> -U <user> -e -O -x -d meddra_290_en meddra_290_en.pgdump
+```
+
+`-O -x` drops the dump's owner and privileges so the objects end up owned by the restoring
+role. Note that `pg_dump -Fc` does not carry the database-level `COMMENT`, so re-apply it
+on the target if you want it.
+
+Verify a restore by comparing structure and row counts against the previous version of the
+same dictionary — they should match column for column, and the row counts should match the
+`.asc` inputs.
+
+---
+
+## Configuration
+
+Two separate sets of variables, which is easy to confuse:
+
+| Variables | Consumed by | Effect |
+| --- | --- | --- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | `docker-compose.yml` | How the local container is provisioned. Applied by `initdb` on the **first** `up` only — once the volume exists, changing them does nothing. |
+| `POSTGRES_PORT` | `docker-compose.yml` | Host port mapped to the container (default `5433`). Applied on every `up`. |
+| `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD` | the `sh/` scripts and `psql` | Where the scripts connect. |
+
+Changing the `POSTGRES_*` set does **not** change where the scripts connect; you have to set
+the `PG*` set to match. A `.env` file works for either.
 
 ```bash
-docker compose down
+docker compose down    # stop the local container
 ```
